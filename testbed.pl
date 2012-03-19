@@ -39,26 +39,28 @@ if($#ARGV < 1) {
 
 sub parseCommandLine() {
   for(my $i = 2; $i <= $#ARGV; $i++) {
-    if ($ARGV[$i++] eq "-d") {
+    if ($ARGV[$i] eq "-d") {
+      $i++;
       push(@directories, $ARGV[$i]);
-    } elsif ($ARGV[$i++] eq "-e") {
+    } elsif ($ARGV[$i] eq "-e") {
+      $i++;
       $email = $ARGV[$i];
-    } elsif ($ARGV[$i++] eq "-t") {
+    } elsif ($ARGV[$i] eq "-t") {
+      $i++;
       $timeout = $ARGV[$i];
     }
   }
 }
 
-sub processCnfDirectory 
-{
+sub processCnfDirectory {
   use Time::HiRes(gettimeofday);
   use File::Basename;
   my($path) = @_;
   $didTimeout=0;
   local $SIG{ALRM} = sub { 
-	die "Timeout\n";
         $didTimeout=1;
         print OUTPUT "timeout";
+	die "Timeout\n";
   };
 
   print( "working in: $path\n" );
@@ -79,16 +81,16 @@ sub processCnfDirectory
     }
     elsif ($file =~ /.*\.cnf/)
     {
-      print OUTPUT $file, ",";
+      print OUTPUT basename($file), ",";
 
       # run using the first solver
+      eval {
       $didTimeout=0;
-      $start1=gettimeofday();
+      $start1=gettimeofday(); 
       alarm $timeout;
       $result = `$solver1 $file`;
-      print $result;
-#      $timeout1 = alarm 0;
-      print "test ", $timeout1, "\n";
+      };
+      alarm 0;
       $end1=gettimeofday();
       if($didTimeout == 0) {
         print OUTPUT $end1 - $start1;
@@ -97,11 +99,13 @@ sub processCnfDirectory
     
   
       # run using the second solver
+      eval {
       $didTimeout=0;
       $start2=gettimeofday();
       alarm $timeout;
       $result = `$solver2 $file`;
-#      $timeout2 = alarm 0;
+      };
+      alarm 0;
       $end2=gettimeofday();
       if($didTimeout == 0) {
         print OUTPUT $end2 - $start2;
