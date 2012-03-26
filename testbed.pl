@@ -4,11 +4,9 @@ $solver2;
 $email;
 $timeout;
 @directories;
-$outputfile;
-$argPos = 0;
 
-if($#ARGV < 1) {
-  print "testbed.pl 'solver1' 'solver2' flags\n";
+if ($#ARGV < 1) {
+  print "testbed.pl #solvers 'solver1' 'solver2' ... 'solvern' flags\n";
   print "Testbed flags: \n";
   print "-e email address to notify upon completion \n";
   print "-d directory of cnf files \n";
@@ -25,9 +23,10 @@ if($#ARGV < 1) {
   print OUTPUT ",",$solver1,",",$solver2,"\n";
   parseCommandLine();
   $numDirectories = @directories;
-  if($numDirectories > 0) {
+  if ($numDirectories > 0) {
     foreach $directory (@directories) {
-      processCnfDirectory($directory);
+      use File::Find;
+      find(\&processCnfFile, $directory);
     }
   } else {
     print "At least one cnf directory must be passed to run.\n";
@@ -38,118 +37,95 @@ if($#ARGV < 1) {
 }
 
 sub parseCommandLine() {
-  for(my $i = 2; $i <= $#ARGV; $i++) {
+  for (my $i = 2; $i <= $#ARGV; $i++) {
     if ($ARGV[$i] eq "-d") {
       $i++;
       push(@directories, $ARGV[$i]);
-    } elsif ($ARGV[$i] eq "-e") {
+    }
+    elsif ($ARGV[$i] eq "-e") {
       $i++;
       $email = $ARGV[$i];
-    } elsif ($ARGV[$i] eq "-t") {
+    }
+    elsif ($ARGV[$i] eq "-t") {
       $i++;
       $timeout = $ARGV[$i];
     }
   }
 }
 
-sub processCnfDirectory {
-  use Time::HiRes(gettimeofday);
-  use File::Basename;
-  my($path) = @_;
-  $didTimeout=0;
-  local $SIG{ALRM} = sub { 
-        $didTimeout=1;
-        print OUTPUT "timeout";
-	die "Timeout\n";
-  };
-
-  print( "working in: $path\n" );
-
-  # append a trailing / if it's not there 
-  $path .= '/' if($path !~ /\/$/); 
-
-  # loop through the files contained in the directory 
-  for my $file (glob($path . '*')) { 
-    $timeout1=0;
-    $timeout2=0; 
-
-    # check if the file is a directory 
-    if( -d $file)
-    {
-      # pass the directory to the routine ( recursion )
-      processCnfDirectory($file);
-    }
-    elsif ($file =~ /.*\.cnf/)
-    {
-      print OUTPUT basename($file), ",";
-
-      # run using the first solver
-      eval {
-      $didTimeout=0;
-      $start1=gettimeofday(); 
-      alarm $timeout;
-      $result = `$solver1 $file`;
-      };
-      alarm 0;
-      $end1=gettimeofday();
-      if($didTimeout == 0) {
-        print OUTPUT $end1 - $start1;
-      }
-      print OUTPUT ",";
-    
-  
-      # run using the second solver
-      eval {
-      $didTimeout=0;
-      $start2=gettimeofday();
-      alarm $timeout;
-      $result = `$solver2 $file`;
-      };
-      alarm 0;
-      $end2=gettimeofday();
-      if($didTimeout == 0) {
-        print OUTPUT $end2 - $start2;
-      }
-
-      print OUTPUT "\n";
-    } 
-  } 
+sub processCnfFile {
+  $file = $_;
+  if (!(-d $file) && $file =~ /.*\.cnf/) {
+# we have a file that is a cnf file
+    use File::Basename;
+    use Time::HiRes(gettimeofday);
+    print OUTPUT basename($file), ",";
+    print basename($file), "\n";
+    runFile($file);
+    print OUTPUT "\n";
+  }
 }
 
-#sub emailOutput() {
-#  use Mail::Sender;
-#  $sender = new Mail::Sender {
-#      smtp => 'mail.yourISP.com',
-#      from => 'nelson64@students.rowan.edu',
-#      on_errors => undef,
-#  };
-#  $sender->OpenMultipart({to => 'Perl-Win32-Users@activeware.foo',
-#                         subject => 'Mail::Sender.pm - new module'});
-# (ref ($sender->MailFile(
-#  {to =>'nicole.nelson8489@gmail.com', subject => 'Testbed run complete',
-#   msg => "Your testbed run has completed. \n
-#	Attached is the output csv file. \n
-#	The file can also be found at $outputfile.",
-#   file => $outputfile;
-#  }));
-#  and print "Mail sent OK."
-# )
-#}
+sub runFile {
+  local($file) = @_;
+  $didtimeout=0;
+  $childpid = fork();
+  eval {
+    local $SIG{ALRM} = sub {
+      print "alarm!!!\n";
+      print OUTPUT "timeout";
+      kill -9, $childpid;
+    };
+    if ($childpid != 0) {    
+      waitpid($childpid, 0);
+    } elsif ($childpid == 0) {
+      setpgrp(0,0);
+      alarm $timeout;
+      $start=gettimeofday();
+      $result = system "$solver1 $file >> output.txt"; #  Call the real solver
+      alarm 0;
+      print "test again ", $result, " -- ", $result >> 8, "\n";
+      $end=gettimeofday();
+      print OUTPUT $end - $start, ",";
+      exit;
+    } else {
+      print "Problem with fork\n";
+      exit;
+    }
+  };
+  # if $@ is defined then the call did not exit successfully
+  if($@) {
+    # the call has either timed out or crashed
+    # if it timed out we already handled it,
+    # if it crashed we need to record it
+    print "defined\n";
+  }
+}
 
 sub emailOutput() {
   use Net::SMTP;
-  $smtp = Net::SMTP->new('outlook.rowan.edu'); # connect to an SMTP server
-  $smtp->mail('nelson64@students.rowan.edu');     # use the sender's address here
-  $smtp->to('nicole.nelson8489@gmail.com');        # recipient's address
-  $smtp->data();                      # Start the mail
+  $smtp = Net::SMTP->new('gmail.com', 'Debug' => 1);
+# connect to an SMTP server
+  if (!defined($smtp) || !($smtp)) {
+    print "SMTP ERROR: Unable to open smtp session.\n";
+    return 0;
+  }
+  $smtp->mail('nicole.nelson8489@gmail.com');
+# use the sender's address here
+  $smtp->to('nelson64@students.rowan.edu');        # recipient's address
+  $smtp->data();
+# Start the mail
 
-  # Send the header.
-  $smtp->datasend("To: nicole.nelson8489@gmail.com\n");
-  $smtp->datasend("From: nelson64@students.rowan.edu\n");
+# Send the header.
+  $smtp->datasend("To: nelson64\@students.rowan.edu\n");
+  $smtp->datasend("From: nicole.nelson8489\@gmail.com\n");
   $smtp->datasend("\n");
 
-  # Send the body.
+# Send the body.
   $smtp->datasend("Hello, World!\n");
-  $smtp->dataend();                   # Finish sending the mail
-  $smtp->quit;                        # Close the SMTP connection
+  $smtp->dataend();
+# Finish sending the mail
+  $smtp->quit;
+# Close the SMTP connection
+  print "EMAILED";
 }
