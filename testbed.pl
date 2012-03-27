@@ -1,12 +1,13 @@
 #!/usr/bin/perl
-$solver1;
-$solver2;
 $email;
 $timeout;
 @directories;
+$outputfile;
+@solvers;
 
 if ($#ARGV < 1) {
   print "testbed.pl #solvers 'solver1' 'solver2' ... 'solvern' flags\n";
+  print "Note: the last line of a solvers output must be SAT or UNSAT";
   print "Testbed flags: \n";
   print "-e email address to notify upon completion \n";
   print "-d directory of cnf files \n";
@@ -18,10 +19,19 @@ if ($#ARGV < 1) {
   $test = join "", $timedata[5]+1900, "_", $timedata[4], "_", $timedata[3], "-", $timedata[2], ":", $timedata[1], ":", $timedata[0];
   $outputfile = join "", ">output", $test, ".csv";
   open(OUTPUT, $outputfile);
-  $solver1 = $ARGV[0];
-  $solver2 = $ARGV[1];
-  print OUTPUT ",",$solver1,",",$solver2,"\n";
   parseCommandLine();
+  print OUTPUT "filename";
+  $numSolvers = @solvers;
+  if($numSolvers > 0) {
+    foreach $solver (@solvers) {
+      print OUTPUT ",$solver time, $solver SAT/UNSAT";
+    }
+  } else {
+    print "there must be at least one solver to run\n";
+    exit;
+  }
+  print OUTPUT "\n";
+  
   $numDirectories = @directories;
   if ($numDirectories > 0) {
     foreach $directory (@directories) {
@@ -37,8 +47,21 @@ if ($#ARGV < 1) {
 }
 
 sub parseCommandLine() {
-  for (my $i = 2; $i <= $#ARGV; $i++) {
-    if ($ARGV[$i] eq "-d") {
+  for (my $i = 0; $i <= $#ARGV; $i++) {
+    if ($ARGV[$i] =~ /-s[0-9]*/) {
+      $tempStr = substr $ARGV[$i], 2;
+      $numSolvers = int($tempStr);
+      print $numSolvers, "\n";
+      for(my $j = 0; $j < $numSolvers; $j++) {
+        $i++;
+	if($ARGV[$i] eq "-d" || $ARGV[$i] eq "-e" || $ARGV[$i] eq "-t") {
+          print "argument $i should be a solver based on the input number of solvers $numSolvers\n";
+          exit;
+        }
+        push(@solvers, $ARGV[$i]);
+      }
+    }
+    elsif ($ARGV[$i] eq "-d") {
       $i++;
       push(@directories, $ARGV[$i]);
     }
@@ -57,23 +80,27 @@ sub processCnfFile {
   $file = $_;
   if (!(-d $file) && $file =~ /.*\.cnf/) {
 # we have a file that is a cnf file
-    use File::Basename;
     use Time::HiRes(gettimeofday);
-    print OUTPUT basename($file), ",";
-    print basename($file), "\n";
-    runFile($file);
+    print OUTPUT $file;
+    foreach $solver (@solvers) {
+      runFile($file, $solver);
+    }
     print OUTPUT "\n";
   }
 }
 
 sub runFile {
-  local($file) = @_;
-  $didtimeout=0;
+  use Fcntl qw(:flock);
+  local($file, $solver) = @_;
   $childpid = fork();
   eval {
-    local $SIG{ALRM} = sub {
+    $SIG{ALRM} = sub {
       print "alarm!!!\n";
-      print OUTPUT "timeout";
+      flock(OUTPUT, LOCK_EX);
+#      flock($OUTPUT, 0, SEEK_END);
+      seek(OUTPUT, 0, 2);
+      print OUTPUT ",timeout,timeout";
+      flock(OUTPUT, LOCK_UN);
       kill -9, $childpid;
     };
     if ($childpid != 0) {    
@@ -82,24 +109,29 @@ sub runFile {
       setpgrp(0,0);
       alarm $timeout;
       $start=gettimeofday();
-      $result = system "$solver1 $file >> output.txt"; #  Call the real solver
+      $result = system "$solver $file >> output.txt 2>test.txt"; #  Call the real solver
       alarm 0;
-      print "test again ", $result, " -- ", $result >> 8, "\n";
       $end=gettimeofday();
-      print OUTPUT $end - $start, ",";
+      use File::ReadBackwards;
+      my $bw = File::ReadBackwards->new("output.txt")
+        or die "Can't read output.txt: $!";
+      $lastLine = $bw->readline();
+      print $lastLine;
+      if($lastLine =~ /.*UNSAT.*/) {
+        print OUTPUT ",UNSAT";
+        print OUTPUT ",", $end - $start;
+      } elsif ($lastLine =~ /.*SAT.*/) {
+	print OUTPUT ",SAT";
+        print OUTPUT ",", $end - $start;
+      } else {
+        print OUTPUT ",crashed,crashed";
+      }
       exit;
     } else {
       print "Problem with fork\n";
       exit;
     }
   };
-  # if $@ is defined then the call did not exit successfully
-  if($@) {
-    # the call has either timed out or crashed
-    # if it timed out we already handled it,
-    # if it crashed we need to record it
-    print "defined\n";
-  }
 }
 
 sub emailOutput() {
