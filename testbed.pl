@@ -2,8 +2,10 @@
 $email;
 $timeout;
 @directories;
-$outputfile;
 @solvers;
+#$dataOutput;
+$pwd;
+$timeformat;
 
 if ($#ARGV < 1) {
   print "testbed.pl #solvers 'solver1' 'solver2' ... 'solvern' flags\n";
@@ -16,15 +18,38 @@ if ($#ARGV < 1) {
 } else {
   use File::Basename;
   @timedata = localtime(time);
-  $test = join "", $timedata[5]+1900, "_", $timedata[4], "_", $timedata[3], "-", $timedata[2], ":", $timedata[1], ":", $timedata[0];
-  $outputfile = join "", ">output", $test, ".csv";
+#  $test = join "", $timedata[5]+1900, "_", $timedata[4], "_", $timedata[3], "-", $timedata[2], ":", $timedata[1], ":", $timedata[0];
+  $timeformat = join "", $timedata[5]+1900, "_";
+  if($timedata[4] < 10) {
+    $timeformat = join "", $timeformat, 0;
+  }
+  $timeformat = join "", $timeformat, $timedata[4], "_";
+  if($timedata[3] < 10) {
+    $timeformat = join "", $timeformat, 0;
+  }
+  $timeformat = join "", $timeformat, $timedata[3], "-";
+  if($timedata[2] < 10) {
+    $timeformat = join "", $timeformat, 0;
+  }
+  $timeformat = join "", $timeformat, $timedata[2], ":";
+  if($timedata[1] < 10) {
+    $timeformat = join "", $timeformat, 0;
+  }
+  $timeformat = join "", $timeformat, $timedata[1], ":";
+  if($timedata[0] < 10) {
+    $timeformat = join "", $timeformat, 0;
+  }
+  $timeformat = join "", $timeformat, $timedata[0], ":";
+  $outputfile = join "", ">output", $timeformat, ".csv";
+  chomp($pwd = `pwd`);
   open(OUTPUT, $outputfile);
   parseCommandLine();
+  print OUTPUT "#@ARGV\n";
   print OUTPUT "filename";
   $numSolvers = @solvers;
   if($numSolvers > 0) {
     foreach $solver (@solvers) {
-      print OUTPUT ",$solver time, $solver SAT/UNSAT";
+      print OUTPUT ",$solver SAT/UNSAT, $solver time, $solver nodeCount, $solver scoutCount, $solver solvedBy, $solver scoutOverhead, $solver %overhead";
     }
   } else {
     print "there must be at least one solver to run\n";
@@ -51,7 +76,6 @@ sub parseCommandLine() {
     if ($ARGV[$i] =~ /-s[0-9]*/) {
       $tempStr = substr $ARGV[$i], 2;
       $numSolvers = int($tempStr);
-      print $numSolvers, "\n";
       for(my $j = 0; $j < $numSolvers; $j++) {
         $i++;
 	if($ARGV[$i] eq "-d" || $ARGV[$i] eq "-e" || $ARGV[$i] eq "-t") {
@@ -95,9 +119,7 @@ sub runFile {
   $childpid = fork();
   eval {
     $SIG{ALRM} = sub {
-      print "alarm!!!\n";
       flock(OUTPUT, LOCK_EX);
-#      flock($OUTPUT, 0, SEEK_END);
       seek(OUTPUT, 0, 2);
       print OUTPUT ",timeout,timeout";
       flock(OUTPUT, LOCK_UN);
@@ -109,14 +131,14 @@ sub runFile {
       setpgrp(0,0);
       alarm $timeout;
       $start=gettimeofday();
-      $result = system "$solver $file >> output.txt 2>test.txt"; #  Call the real solver
+      $output = join "", $pwd, "/", $file, "_", $timeformat, ".txt";
+      system "$solver $file > $output 2>&1"; #  Call the real solver
       alarm 0;
       $end=gettimeofday();
       use File::ReadBackwards;
-      my $bw = File::ReadBackwards->new("output.txt")
+      my $bw = File::ReadBackwards->new($output)
         or die "Can't read output.txt: $!";
       $lastLine = $bw->readline();
-      print $lastLine;
       if($lastLine =~ /.*UNSAT.*/) {
         print OUTPUT ",UNSAT";
         print OUTPUT ",", $end - $start;
@@ -125,6 +147,46 @@ sub runFile {
         print OUTPUT ",", $end - $start;
       } else {
         print OUTPUT ",crashed,crashed";
+      }
+      $value = `grep nodeCount $output`;
+      @parts = split(' ', $value);
+      $shifted = shift(@parts);
+      if(@parts) {
+        print OUTPUT ",", $parts[0];
+      } else {
+        print OUTPUT ",";  
+      }
+      $value = `grep scoutCount $output`;
+      @parts = split(' ', $value);
+      $shifted = shift(@parts);
+      if(@parts) {
+        print OUTPUT ",", $parts[0];
+      } else {
+        print OUTPUT ",";  
+      }
+      $value = `grep solvedBy $output`;
+      @parts = split(' ', $value);
+      $shifted = shift(@parts);
+      if(@parts) {
+        print OUTPUT ",", $parts[0];
+      } else {
+        print OUTPUT ",";  
+      }
+      $value = `grep scoutOverhead $output`;
+      @parts = split(' ', $value);
+      $shifted = shift(@parts);
+      if(@parts) {
+        print OUTPUT ",", $parts[0];
+      } else {
+        print OUTPUT ",";  
+      }
+      $value = `grep %overhead $output`;
+      @parts = split(' ', $value);
+      $shifted = shift(@parts);
+      if(@parts) {
+        print OUTPUT ",", $parts[0];
+      } else {
+        print OUTPUT ",";  
       }
       exit;
     } else {
