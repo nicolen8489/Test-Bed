@@ -11,6 +11,7 @@ $timeformat;
 @fileColumnNames;
 %fileColumnData;
 $includeFileData = 0;
+$testbedoutput;
 
 if ($#ARGV < 1) {
   print "testbed.pl #solvers 'solver1' 'solver2' ... 'solvern' flags\n";
@@ -49,7 +50,10 @@ if ($#ARGV < 1) {
   $outputfile = join "", ">output", $timeformat, ".csv";
   chomp($pwd = `pwd`);
   open(OUTPUT, $outputfile);
-  open(PROGOUTPUT, '>testbed_output.txt');
+  $testbedoutput = join "", "testbed_output", $timeformat, ".txt";
+  $opentestbedfile = join "", ">", $testbedoutput;
+#  open(PROGOUTPUT, '>testbed_output.txt');
+  open(PROGOUTPUT, $opentestbedfile);
   parseCommandLine();
   print OUTPUT "#@ARGV\n";
   print OUTPUT "filename";
@@ -84,7 +88,8 @@ if ($#ARGV < 1) {
   }
   close(OUTPUT);
   close(OUTPUTPROG);
-  `rm testbed_output.txt`;
+  `rm $testbedoutput`;
+#  `rm testbed_output.txt`;
 #  emailOutput();
 }
 
@@ -104,6 +109,9 @@ sub parseCommandLine() {
 	  $solvers{$ARGV[$i]} = $ARGV[$i+2];
           $i++;
           $i++;
+        } else {
+          print "all solvers must have a single word identifier\n";
+          exit;
         }
       }
     }
@@ -155,10 +163,11 @@ sub processCnfFile {
     print OUTPUT $file;
     foreach $solver (keys %solvers) {
       $values = runFile($file, $solver);
-      $output = join "", $pwd, "/testbed_output.txt";
+#      $output = join "", $pwd, "/testbed_output.txt";
+      $output = join "", $pwd, "/", $testbedoutput;
       use File::ReadBackwards;
       my $bw = File::ReadBackwards->new($output)
-        or die "Can't read output.txt: $!";
+        or die "Can't read $testbedoutput: $!";
       $lastLine = $bw->readline();
       chomp($lastLine);
       @values = split(",", $lastLine);
@@ -168,11 +177,10 @@ sub processCnfFile {
       }
     }
     if($includeFileData) {
-      if(exists $fileColumnData{$file}) {
+      if(defined $fileColumnData{$file}) {
         print OUTPUT $fileColumnData{$file};
       } else {
- 	$numColumns = @fileColumnNames;
-        for($i = 0; i < $numColumns; $i++) {
+        for($i = 0; $i <= $#fileColumnNames; $i++) {
 	  print OUTPUT ",";
         }
       }
