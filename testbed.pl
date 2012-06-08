@@ -2,23 +2,29 @@
 $email;
 $timeout;
 @directories;
-@solvers;
-#$dataOutput;
+#@solvers;
+#@solverNames;
+%solvers;
 $pwd;
 $timeformat;
+%columnData;
+@fileColumnNames;
+%fileColumnData;
+$includeFileData = 0;
 
 if ($#ARGV < 1) {
   print "testbed.pl #solvers 'solver1' 'solver2' ... 'solvern' flags\n";
   print "Note: the last line of a solvers output must be SAT or UNSAT";
   print "Testbed flags: \n";
-  print "-e email address to notify upon completion \n";
-  print "-d directory of cnf files \n";
-  print "-t timeout limit per cnf file \n";
+#  print "-e email address to notify upon completion \n";
+  print "-d <directory path> directory of cnf files \n";
+  print "-t <time in seconds> timeout limit per cnf file \n";
+  print "-n name for solver in previous argument \n";
+  print "-f <file> include data from file \n";
   exit;
 } else {
   use File::Basename;
   @timedata = localtime(time);
-#  $test = join "", $timedata[5]+1900, "_", $timedata[4], "_", $timedata[3], "-", $timedata[2], ":", $timedata[1], ":", $timedata[0];
   $timeformat = join "", $timedata[5]+1900, "_";
   if($timedata[4] < 10) {
     $timeformat = join "", $timeformat, 0;
@@ -39,23 +45,32 @@ if ($#ARGV < 1) {
   if($timedata[0] < 10) {
     $timeformat = join "", $timeformat, 0;
   }
-  $timeformat = join "", $timeformat, $timedata[0], ":";
+  $timeformat = join "", $timeformat, $timedata[0];
   $outputfile = join "", ">output", $timeformat, ".csv";
   chomp($pwd = `pwd`);
   open(OUTPUT, $outputfile);
+  open(PROGOUTPUT, '>testbed_output.txt');
   parseCommandLine();
   print OUTPUT "#@ARGV\n";
   print OUTPUT "filename";
-  $numSolvers = @solvers;
-  if($numSolvers > 0) {
-    foreach $solver (@solvers) {
-      print OUTPUT ",$solver SAT/UNSAT, $solver time, $solver nodeCount, $solver scoutCount, $solver solvedBy, $solver scoutOverhead, $solver %overhead";
+  if($includeFileData) {
+    foreach $columnName (@fileColumnNames) {
+      chomp($columnName);
+      print OUTPUT ",$columnName";
     }
+  }
+  @columnNames = ("SAT/UNSAT", "nodeCount", "scoutCount", "time", "solvedBy", "scoutTime", "scoutSetup", "scoutOverhead", "%overhead", "validated");
+   if(keys(%solvers) > 0) {
+    foreach $columnName (@columnNames) {
+      foreach $solverName (values %solvers) {
+        print OUTPUT ",$solverName $columnName"
+      }
+    }
+    print OUTPUT "\n";
   } else {
     print "there must be at least one solver to run\n";
     exit;
   }
-  print OUTPUT "\n";
   
   $numDirectories = @directories;
   if ($numDirectories > 0) {
@@ -68,6 +83,8 @@ if ($#ARGV < 1) {
     exit;
   }
   close(OUTPUT);
+  close(OUTPUTPROG);
+  `rm testbed_output.txt`;
 #  emailOutput();
 }
 
@@ -82,7 +99,12 @@ sub parseCommandLine() {
           print "argument $i should be a solver based on the input number of solvers $numSolvers\n";
           exit;
         }
-        push(@solvers, $ARGV[$i]);
+	$solvers{$ARGV[$i]} = $ARGV[$i];
+        if($ARGV[$i+1] eq "-n") {	
+	  $solvers{$ARGV[$i]} = $ARGV[$i+2];
+          $i++;
+          $i++;
+        }
       }
     }
     elsif ($ARGV[$i] eq "-d") {
@@ -97,6 +119,31 @@ sub parseCommandLine() {
       $i++;
       $timeout = $ARGV[$i];
     }
+    elsif ($ARGV[$i] eq "-f") {
+      if($includeFileData) {
+        print "unable to read data from multiple files, only reading data from first file\n";
+      } else {
+        $includeFileData = 1;
+        open(INPUTFILE, $ARGV[++$i]);
+        @lineData = <INPUTFILE>;	
+        close(INPUTFILE);
+        $firstLine = 1;
+        foreach $line (@lineData) {
+          if(!($line =~ /#.*/)) {
+	    if($firstLine) {
+              @fileColumnNames = split(",", $line);
+	      shift(@fileColumnNames);
+              $firstLine = 0;
+            } else {
+  	      @values = split(",", $line);
+  	      $temp = substr($line, length($values[0]));
+              chomp($temp);
+	      $fileColumnData{$values[0]} = $temp;
+            }
+	  }
+        }
+      }
+    }
   }
 }
 
@@ -106,8 +153,34 @@ sub processCnfFile {
 # we have a file that is a cnf file
     use Time::HiRes(gettimeofday);
     print OUTPUT $file;
-    foreach $solver (@solvers) {
-      runFile($file, $solver);
+    foreach $solver (keys %solvers) {
+      $values = runFile($file, $solver);
+      $output = join "", $pwd, "/testbed_output.txt";
+      use File::ReadBackwards;
+      my $bw = File::ReadBackwards->new($output)
+        or die "Can't read output.txt: $!";
+      $lastLine = $bw->readline();
+      chomp($lastLine);
+      @values = split(",", $lastLine);
+      $i = 1;
+      foreach $columnName (@columnNames) {
+        $columnData{$columnName} = "$columnData{$columnName},$values[$i++]";
+      }
+    }
+    if($includeFileData) {
+      if(exists $fileColumnData{$file}) {
+        print OUTPUT $fileColumnData{$file};
+      } else {
+ 	$numColumns = @fileColumnNames;
+        for($i = 0; i < $numColumns; $i++) {
+	  print OUTPUT ",";
+        }
+      }
+    }
+    foreach $columnName (@columnNames) {
+      $columnValues = $columnData{$columnName};
+      $columnData{$columnName} = "";
+      print OUTPUT $columnValues;	
     }
     print OUTPUT "\n";
   }
@@ -119,10 +192,10 @@ sub runFile {
   $childpid = fork();
   eval {
     $SIG{ALRM} = sub {
-      flock(OUTPUT, LOCK_EX);
-      seek(OUTPUT, 0, 2);
-      print OUTPUT ",timeout,timeout";
-      flock(OUTPUT, LOCK_UN);
+      flock(PROGOUTPUT, LOCK_EX);
+      seek(PROGOUTPUT, 0, 2);
+      print PROGOUTPUT ",timeout,,,,,,,timeout,,\n";
+      flock(PROGOUTPUT, LOCK_UN);
       kill -9, $childpid;
     };
     if ($childpid != 0) {    
@@ -131,63 +204,62 @@ sub runFile {
       setpgrp(0,0);
       alarm $timeout;
       $start=gettimeofday();
-      $output = join "", $pwd, "/", $file, "_", $timeformat, ".txt";
+      $output = join "", $pwd, "/", $file, "_", $timeformat, "_", $solvers{$solver}, ".txt";
       system "$solver $file > $output 2>&1"; #  Call the real solver
       alarm 0;
       $end=gettimeofday();
-      use File::ReadBackwards;
-      my $bw = File::ReadBackwards->new($output)
-        or die "Can't read output.txt: $!";
-      $lastLine = $bw->readline();
-      if($lastLine =~ /.*UNSAT.*/) {
-        print OUTPUT ",UNSAT";
-        print OUTPUT ",", $end - $start;
-      } elsif ($lastLine =~ /.*SAT.*/) {
-	print OUTPUT ",SAT";
-        print OUTPUT ",", $end - $start;
-      } else {
-        print OUTPUT ",crashed,crashed";
+      foreach $columnName (@columnNames) {
+        if($columnName eq "SAT/UNSAT") {
+	  use File::ReadBackwards;
+          my $bw = File::ReadBackwards->new($output)
+            or die "Can't read output.txt: $!";
+          $lastLine = $bw->readline();
+          if($lastLine =~ /.*UNSAT.*/) {
+            print PROGOUTPUT ",UNSAT";
+          } elsif ($lastLine =~ /.*SAT.*/) {
+	    print PROGOUTPUT ",SAT";
+          } else {
+            print PROGOUTPUT ",crashed";
+          }
+        } elsif ($columnName eq "time") {
+	  use File::ReadBackwards;
+          my $bw = File::ReadBackwards->new($output)
+            or die "Can't read output.txt: $!";
+          $lastLine = $bw->readline();
+          if($lastLine =~ /.*UNSAT.*/) {
+            print PROGOUTPUT ",", $end - $start;
+          } elsif ($lastLine =~ /.*SAT.*/) {
+            print PROGOUTPUT ",", $end - $start;
+          } else {
+            print PROGOUTPUT ",crashed";
+          }
+        } elsif ($columnName eq "validated") {
+          $value = `grep solution $output`;
+          @parts = split(' ', $value);
+          shift(@parts);
+          if(@parts) {
+            `java -jar /home/nicolen/Documents/Thesis/check.jar $file $parts[0] > validation.txt`;
+            $valid = `grep Satisfied validation.txt`;
+            if($valid eq "") {
+              print PROGOUTPUT ",not-valid";
+            } else {
+              print PROGOUTPUT ",valid";
+            }
+          } else {
+            print PROGOUTPUT ",";  
+          }
+        } else {
+          $value = `grep $columnName $output`;
+          @parts = split(' ', $value);
+          shift(@parts);
+          if(@parts) {
+            print PROGOUTPUT ",", $parts[0];
+          } else {
+            print PROGOUTPUT ",";  
+          }
+        }
       }
-      $value = `grep nodeCount $output`;
-      @parts = split(' ', $value);
-      $shifted = shift(@parts);
-      if(@parts) {
-        print OUTPUT ",", $parts[0];
-      } else {
-        print OUTPUT ",";  
-      }
-      $value = `grep scoutCount $output`;
-      @parts = split(' ', $value);
-      $shifted = shift(@parts);
-      if(@parts) {
-        print OUTPUT ",", $parts[0];
-      } else {
-        print OUTPUT ",";  
-      }
-      $value = `grep solvedBy $output`;
-      @parts = split(' ', $value);
-      $shifted = shift(@parts);
-      if(@parts) {
-        print OUTPUT ",", $parts[0];
-      } else {
-        print OUTPUT ",";  
-      }
-      $value = `grep scoutOverhead $output`;
-      @parts = split(' ', $value);
-      $shifted = shift(@parts);
-      if(@parts) {
-        print OUTPUT ",", $parts[0];
-      } else {
-        print OUTPUT ",";  
-      }
-      $value = `grep %overhead $output`;
-      @parts = split(' ', $value);
-      $shifted = shift(@parts);
-      if(@parts) {
-        print OUTPUT ",", $parts[0];
-      } else {
-        print OUTPUT ",";  
-      }
+      print PROGOUTPUT "\n";
       exit;
     } else {
       print "Problem with fork\n";
